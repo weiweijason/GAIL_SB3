@@ -52,11 +52,19 @@ def parse_args():
     parser.add_argument("--device", type=str, default="cuda",
                         help="運行設備 (cuda 或 cpu)")
     
+    # 策略網絡設置
+    parser.add_argument("--hidden_dims", type=str, default="64,64",
+                        help="策略網絡隱藏層維度，用逗號分隔，例如：64,64")
+    
     return parser.parse_args()
 
 
-def load_policy(model_path, env, device):
+def load_policy(model_path, env, device, hidden_dims_str="64,64"):
     """加載已訓練的策略。"""
+    # 解析隱藏層維度
+    hidden_dims = tuple(int(dim) for dim in hidden_dims_str.split(','))
+    print(f"使用隱藏層維度: {hidden_dims}")
+    
     # 確定動作空間類型
     if isinstance(env.action_space, gym.spaces.Discrete):
         is_discrete = True
@@ -73,14 +81,14 @@ def load_policy(model_path, env, device):
         policy = DiscretePolicy(
             state_dim=state_dim,
             action_dim=action_dim,
-            hidden_dims=(256, 256),
+            hidden_dims=hidden_dims,
             device=device
         )
     else:
         policy = ContinuousPolicy(
             state_dim=state_dim,
             action_dim=action_dim,
-            hidden_dims=(256, 256),
+            hidden_dims=hidden_dims,
             device=device
         )
     
@@ -145,8 +153,8 @@ def load_policy(model_path, env, device):
                             policy.load_state_dict(checkpoint[k])
                             print(f"使用 '{k}' 成功加載策略")
                             break
-                        except:
-                            continue
+                        except Exception as e:
+                            print(f"嘗試加載 '{k}' 失敗: {e}")
                 else:
                     print("未找到策略相關鍵，嘗試直接將模型參數加載到策略中")
             # 情況3: 直接是策略的狀態字典
@@ -168,8 +176,8 @@ def load_policy(model_path, env, device):
                                 policy.load_state_dict(checkpoint[key])
                                 print(f"使用 '{key}' 成功加載策略")
                                 break
-                            except:
-                                continue
+                            except Exception as e:
+                                print(f"嘗試加載 '{key}' 失敗: {e}")
         # 情況5: 檢查點直接是模型參數
         else:
             print("檢查點不是字典格式，嘗試直接加載")
@@ -518,7 +526,7 @@ def main(args):
     
     # 加載策略
     print(f"從 {args.model_path} 加載模型...")
-    policy, is_discrete = load_policy(args.model_path, env, args.device)
+    policy, is_discrete = load_policy(args.model_path, env, args.device, args.hidden_dims)
     
     # 評估策略
     print(f"在 {args.env} 環境中評估 {args.n_eval_episodes} 個回合...")
