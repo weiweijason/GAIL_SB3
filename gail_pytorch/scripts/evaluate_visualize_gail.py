@@ -97,16 +97,39 @@ def load_policy(model_path, env, device):
     if "policy" in checkpoint:
         policy.load_state_dict(checkpoint["policy"])
     else:
-        # 假設是通過GAIL類保存的模型
-        # 此處需要創建臨時數據以初始化GAIL實例
-        dummy_expert_data = {"states": [], "actions": [], "mean_return": 0}
+        # 創建一個包含必要結構的模擬專家數據
+        # 確保數據中包含非空的states和actions，以通過GAIL初始化檢查
+        state_sample = np.zeros((1, state_dim), dtype=np.float32)
+        if is_discrete:
+            action_sample = np.array([0], dtype=np.int64)
+        else:
+            action_sample = np.zeros((1, action_dim), dtype=np.float32)
+            
+        dummy_expert_data = {
+            "states": state_sample,
+            "actions": action_sample,
+            "rewards": np.array([0.0]),
+            "dones": np.array([False]),
+            "next_states": state_sample.copy(),
+            "episode_returns": [0.0],
+            "episode_lengths": [1],
+            "mean_return": 0.0,
+            "std_return": 0.0
+        }
+        
+        # 創建GAIL實例
         gail = GAIL(
             policy=policy,
             expert_trajectories=dummy_expert_data,
             device=device
         )
-        # 加載GAIL模型
-        gail.policy.load_state_dict(checkpoint["policy"])
+        
+        # 加載模型
+        if "discriminator" in checkpoint:
+            gail.discriminator.load_state_dict(checkpoint["discriminator"])
+            policy.load_state_dict(checkpoint["policy"])
+        else:
+            policy.load_state_dict(checkpoint)
     
     policy.eval()  # 設置為評估模式
     
