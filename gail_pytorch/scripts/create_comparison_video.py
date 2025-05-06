@@ -187,71 +187,142 @@ def replay_expert_trajectories(env, expert_data, n_episodes, max_steps, seed=Non
     actions = expert_data["actions"]
     rewards = expert_data.get("rewards", [])
     dones = expert_data.get("dones", [])
+    episode_returns = expert_data.get("episode_returns", [])
+    episode_lengths = expert_data.get("episode_lengths", [])
     
-    # Get episode boundaries
-    episode_ends = [i for i, done in enumerate(dones) if done] if len(dones) > 0 else []
-    if not episode_ends:
-        # If no explicit episode endings, try to infer from other information
-        if "episode_lengths" in expert_data:
-            lengths = expert_data["episode_lengths"]
-            episode_ends = []
-            current_end = 0
-            for length in lengths:
-                current_end += length
-                episode_ends.append(current_end - 1)  # Convert to 0-indexing
+    print("\n=== Replaying Expert Trajectories ===")
     
-    # If still can't determine episode boundaries, assume all data is one episode
-    if not episode_ends:
-        episode_ends = [len(states) - 1]
-    
-    # Select episodes to replay
-    if seed is not None:
-        np.random.seed(seed)
-    
-    if len(episode_ends) <= n_episodes:
-        selected_episodes = range(len(episode_ends))
-    else:
-        selected_episodes = np.random.choice(len(episode_ends), n_episodes, replace=False)
-    
-    # Replay each selected episode
-    for ep_idx in selected_episodes:
-        frames = []
-        start_idx = 0 if ep_idx == 0 else episode_ends[ep_idx - 1] + 1
-        end_idx = episode_ends[ep_idx]
+    # If episode_returns available, use these directly instead of recalculating
+    if episode_returns and len(episode_returns) >= n_episodes:
+        # Select episodes to replay
+        if seed is not None:
+            np.random.seed(seed)
         
-        # Set environment to initial state
-        state, _ = env.reset()
+        if len(episode_returns) <= n_episodes:
+            selected_episodes = range(len(episode_returns))
+        else:
+            selected_episodes = np.random.choice(len(episode_returns), n_episodes, replace=False)
+            
+        # Get episode boundaries
+        episode_ends = [i for i, done in enumerate(dones) if done] if len(dones) > 0 else []
+        if not episode_ends:
+            # If no explicit episode endings, try to infer from episode_lengths
+            if episode_lengths:
+                episode_ends = []
+                current_end = 0
+                for length in episode_lengths:
+                    current_end += length
+                    episode_ends.append(current_end - 1)  # Convert to 0-indexing
         
-        # Replay this episode
-        ep_return = 0
-        episode_length = min(end_idx - start_idx + 1, max_steps)
+        # If still can't determine episode boundaries, assume all data is one episode
+        if not episode_ends:
+            episode_ends = [len(states) - 1]
         
-        for i in range(episode_length):
-            idx = start_idx + i
-            if idx > end_idx:
-                break
+        # Replay each selected episode
+        for idx, ep_idx in enumerate(selected_episodes):
+            frames = []
+            start_idx = 0 if ep_idx == 0 else episode_ends[ep_idx - 1] + 1
+            end_idx = episode_ends[ep_idx]
+            
+            # Set environment to initial state
+            state, _ = env.reset()
+            
+            # Replay this episode
+            ep_return = episode_returns[ep_idx]  # Use stored return instead of recalculating
+            episode_length = min(end_idx - start_idx + 1, max_steps)
+            
+            for i in range(episode_length):
+                idx = start_idx + i
+                if idx > end_idx:
+                    break
+                    
+                # Render current state
+                frame = env.render()
+                frames.append(frame)
                 
-            # Render current state
-            frame = env.render()
-            frames.append(frame)
+                # Get expert action and execute (but don't accumulate rewards)
+                action = actions[idx]
+                next_state, _, terminated, truncated, _ = env.step(action)
+                done = terminated or truncated
+                
+                # Update state
+                state = next_state
+                
+                if done:
+                    break
             
-            # Get expert action and execute
-            action = actions[idx]
-            next_state, reward, terminated, truncated, _ = env.step(action)
-            done = terminated or truncated
+            all_frames.append(frames)
+            all_returns.append(ep_return)
+            all_lengths.append(episode_length)
             
-            # Update state and return
-            state = next_state
-            ep_return += reward
-            
-            if done:
-                break
+            print(f"Expert Episode {ep_idx+1} - Return: {ep_return:.2f}, Length: {episode_length}")
+    
+    # Fallback to original method if episode_returns not available
+    else:
+        # Get episode boundaries
+        episode_ends = [i for i, done in enumerate(dones) if done] if len(dones) > 0 else []
+        if not episode_ends:
+            # If no explicit episode endings, try to infer from other information
+            if "episode_lengths" in expert_data:
+                lengths = expert_data["episode_lengths"]
+                episode_ends = []
+                current_end = 0
+                for length in lengths:
+                    current_end += length
+                    episode_ends.append(current_end - 1)  # Convert to 0-indexing
         
-        all_frames.append(frames)
-        all_returns.append(ep_return)
-        all_lengths.append(episode_length)
+        # If still can't determine episode boundaries, assume all data is one episode
+        if not episode_ends:
+            episode_ends = [len(states) - 1]
         
-        print(f"Expert Episode {ep_idx+1} - Return: {ep_return:.2f}, Length: {episode_length}")
+        # Select episodes to replay
+        if seed is not None:
+            np.random.seed(seed)
+        
+        if len(episode_ends) <= n_episodes:
+            selected_episodes = range(len(episode_ends))
+        else:
+            selected_episodes = np.random.choice(len(episode_ends), n_episodes, replace=False)
+        
+        # Replay each selected episode
+        for ep_idx in selected_episodes:
+            frames = []
+            start_idx = 0 if ep_idx == 0 else episode_ends[ep_idx - 1] + 1
+            end_idx = episode_ends[ep_idx]
+            
+            # Set environment to initial state
+            state, _ = env.reset()
+            
+            # Replay this episode
+            ep_return = 0
+            episode_length = min(end_idx - start_idx + 1, max_steps)
+            
+            for i in range(episode_length):
+                idx = start_idx + i
+                if idx > end_idx:
+                    break
+                    
+                # Render current state
+                frame = env.render()
+                frames.append(frame)
+                
+                # Get expert action and execute
+                action = actions[idx]
+                next_state, reward, terminated, truncated, _ = env.step(action)
+                done = terminated or truncated
+                
+                # Update state and return
+                state = next_state
+                ep_return += reward
+                
+                if done:
+                    break
+            
+            all_frames.append(frames)
+            all_returns.append(ep_return)
+            all_lengths.append(episode_length)
+            
+            print(f"Expert Episode {ep_idx+1} - Return: {ep_return:.2f}, Length: {episode_length}")
     
     avg_return = np.mean(all_returns)
     avg_length = np.mean(all_lengths)
