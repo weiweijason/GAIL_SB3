@@ -1,0 +1,1 @@
+"""GAIL configuration module."""
