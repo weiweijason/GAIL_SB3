@@ -148,9 +148,13 @@ class GAIL:
             
             d_output = self.discriminator(states_tensor, actions_tensor)
             # -log(1-D) as the reward
-            rewards = -torch.log(1 - d_output + 1e-8).squeeze().detach().cpu().numpy()
+            rewards = -torch.log(1 - d_output + 1e-8).detach().cpu().numpy()
             
-        return rewards
+            # 確保始終返回數組，即使是單個值
+            if rewards.size == 1:
+                return np.array([rewards.item()])
+            else:
+                return rewards.flatten()  # 使用flatten確保返回一維數組
     
     def update_discriminator(self, agent_states, agent_actions):
         """
