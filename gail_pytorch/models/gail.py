@@ -167,41 +167,88 @@ class GAIL:
         Returns:
             Discriminator loss value
         """
-        # Convert to PyTorch tensors
+        # 確保我們有足夠的數據可以使用
+        if len(agent_states) < self.batch_size:
+            # 如果數據不足，複製現有數據直到達到批次大小
+            factor = int(np.ceil(self.batch_size / len(agent_states)))
+            agent_states = np.tile(agent_states, (factor, 1))[:self.batch_size]
+            
+            # 處理離散動作（可能是標量）和連續動作（可能是數組）
+            if isinstance(agent_actions, (int, float)) or (hasattr(agent_actions, 'shape') and len(agent_actions.shape) == 0):
+                agent_actions = np.array([agent_actions] * self.batch_size)
+            else:
+                if len(np.array(agent_actions).shape) == 1:
+                    agent_actions = np.tile(agent_actions, factor)[:self.batch_size]
+                else:
+                    agent_actions = np.tile(agent_actions, (factor, 1))[:self.batch_size]
+                
+        # 確保維度正確
+        agent_states = np.array(agent_states)
+        agent_actions = np.array(agent_actions)
+        
+        # 轉換為PyTorch張量
         agent_states = torch.FloatTensor(agent_states).to(self.device)
-        agent_actions = torch.FloatTensor(agent_actions).to(self.device)
         
-        # Sample expert data
-        indices = np.random.randint(0, len(self.expert_trajectories['states']), self.batch_size)
-        expert_states = torch.FloatTensor(
-            [self.expert_trajectories['states'][i] for i in indices]
-        ).to(self.device)
-        expert_actions = torch.FloatTensor(
-            [self.expert_trajectories['actions'][i] for i in indices]
-        ).to(self.device)
+        # 確保動作是浮點型張量，並處理離散動作
+        if len(agent_actions.shape) == 1:
+            agent_actions = torch.FloatTensor(agent_actions).unsqueeze(1).to(self.device)
+        else:
+            agent_actions = torch.FloatTensor(agent_actions).to(self.device)
         
-        # Train discriminator
+        # 抽樣專家數據
+        try:
+            # 安全獲取專家軌跡長度
+            expert_data_length = len(self.expert_trajectories['states'])
+            indices = np.random.randint(0, expert_data_length, self.batch_size)
+            
+            # 獲取專家狀態
+            expert_states = []
+            for i in indices:
+                expert_states.append(self.expert_trajectories['states'][i])
+            expert_states = torch.FloatTensor(np.array(expert_states)).to(self.device)
+            
+            # 獲取專家動作 - 處理離散和連續動作
+            expert_actions = []
+            for i in indices:
+                action = self.expert_trajectories['actions'][i]
+                expert_actions.append(action)
+            
+            # 將專家動作轉換為適當的張量格式
+            expert_actions = np.array(expert_actions)
+            if len(expert_actions.shape) == 1:
+                expert_actions = torch.FloatTensor(expert_actions).unsqueeze(1).to(self.device)
+            else:
+                expert_actions = torch.FloatTensor(expert_actions).to(self.device)
+                
+        except (TypeError, IndexError) as e:
+            print(f"Error processing expert data: {e}")
+            print(f"Expert trajectory format: {type(self.expert_trajectories)}")
+            print(f"States shape: {np.array(self.expert_trajectories['states']).shape}")
+            print(f"Actions shape: {np.array(self.expert_trajectories['actions']).shape}")
+            raise
+        
+        # 訓練判別器
         self.disc_optimizer.zero_grad()
         
-        # Predict on expert data (should output 1)
+        # 預測專家數據（應輸出1）
         expert_preds = self.discriminator(expert_states, expert_actions)
         expert_loss = nn.BCELoss()(
             expert_preds, 
             torch.ones((self.batch_size, 1), device=self.device)
         )
         
-        # Predict on agent data (should output 0)
+        # 預測智能體數據（應輸出0）
         agent_preds = self.discriminator(agent_states, agent_actions)
         agent_loss = nn.BCELoss()(
             agent_preds, 
             torch.zeros((self.batch_size, 1), device=self.device)
         )
         
-        # Total loss and backpropagation
+        # 總損失和反向傳播
         disc_loss = expert_loss + agent_loss
         disc_loss.backward()
         
-        # Optionally clip gradients
+        # 可選梯度裁剪
         if self.clip_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(
                 self.discriminator.parameters(), 
@@ -210,7 +257,8 @@ class GAIL:
         
         self.disc_optimizer.step()
         
-        # Log metrics
+        # 記錄指標
+        self.iterations += 1
         self.writer.add_scalar('discriminator/loss', disc_loss.item(), self.iterations)
         self.writer.add_scalar('discriminator/expert_acc', 
                              (expert_preds > 0.5).float().mean().item(), 
