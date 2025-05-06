@@ -1,10 +1,4 @@
-# 建議檔案路徑：gail_pytorch/scripts/evaluate_visualize_gail.py
-"""
-評估和可視化GAIL模型的腳本。
-
-此腳本用於加載訓練好的GAIL模型，進行評估並生成各種可視化結果，
-以便展示模型的表現。
-"""
+import sys
 import os
 import argparse
 import time
@@ -213,10 +207,21 @@ def evaluate_policy_with_data_collection(policy, env, args, is_discrete):
         episode_length = 0
         
         while not done and episode_length < args.max_ep_len:
+            # 安全地嘗試渲染，如果失敗則輸出警告而不終止程式
             if args.render or args.save_video:
-                frame = env.render()
-                if args.save_video:
-                    frames.append(frame)
+                try:
+                    frame = env.render()
+                    if args.save_video and frame is not None:
+                        frames.append(frame)
+                except Exception as e:
+                    if episode_length == 0:  # 只在每個回合的第一步輸出警告
+                        print(f"警告: 渲染環境時出錯: {e}")
+                        print("繼續評估但不進行渲染。如需渲染，請安裝必要的依賴: pip install pygame")
+                        # 關閉渲染以避免重複錯誤
+                        args.render = False
+                        if args.save_video:
+                            print("視頻保存功能已停用")
+                            args.save_video = False
             
             # 從策略獲取動作
             if is_discrete:
@@ -441,7 +446,7 @@ def generate_summary_report(evaluation_data, expert_data, args):
             "平均回報": f"{evaluation_data['mean_return']:.2f} ± {evaluation_data['std_return']:.2f}",
             "平均回合長度": f"{evaluation_data['mean_length']:.2f} ± {evaluation_data['std_length']:.2f}",
             "最高回報": f"{max(evaluation_data['returns']):.2f}",
-            "最低回報": f"{min(evaluation_data['returns']):.2f}"
+            "最低回報": f"{min(evaluation_data['returns'])::.2f}"
         }
     }
     
@@ -450,7 +455,7 @@ def generate_summary_report(evaluation_data, expert_data, args):
             "平均回報": f"{expert_data['mean_return']:.2f} ± {expert_data['std_return']:.2f}",
             "平均回合長度": f"{np.mean(expert_data['episode_lengths']):.2f} ± {np.std(expert_data['episode_lengths']):.2f}",
             "最高回報": f"{max(expert_data['episode_returns']):.2f}",
-            "最低回報": f"{min(expert_data['episode_returns']):.2f}"
+            "最低回報": f"{min(expert_data['episode_returns'])::.2f}"
         }
         
         # 計算模型與專家的表現差距
@@ -488,8 +493,28 @@ def main(args):
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     
+    # 嘗試安裝所需的依賴
+    if args.render or args.save_video:
+        try:
+            import importlib
+            if not importlib.util.find_spec("pygame"):
+                print("正在嘗試安裝 pygame...")
+                import subprocess
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "pygame"])
+                print("pygame 安裝成功！")
+        except Exception as e:
+            print(f"無法自動安裝 pygame: {e}")
+            print("繼續執行但可能無法渲染環境")
+    
     # 創建環境
-    env = gym.make(args.env, render_mode="rgb_array" if args.render or args.save_video else None)
+    try:
+        env = gym.make(args.env, render_mode="rgb_array" if args.render or args.save_video else None)
+    except Exception as e:
+        print(f"使用 render_mode 創建環境時出錯: {e}")
+        print("嘗試不指定 render_mode 創建環境...")
+        env = gym.make(args.env)
+        if args.render or args.save_video:
+            print("警告: 環境創建時未指定渲染模式，可能無法保存視頻")
     
     # 加載策略
     print(f"從 {args.model_path} 加載模型...")
