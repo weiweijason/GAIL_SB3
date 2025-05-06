@@ -19,53 +19,53 @@ from gail_pytorch.utils.expert_trajectories import load_expert_trajectories
 
 
 def parse_args():
-    """解析命令行參數。"""
-    parser = argparse.ArgumentParser(description="評估和可視化GAIL模型")
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="Evaluate and visualize GAIL model")
     
-    # 模型和環境設置
+    # Model and environment settings
     parser.add_argument("--model_path", type=str, required=True,
-                        help="已訓練模型的路徑")
+                        help="Path to the trained model")
     parser.add_argument("--env", type=str, default="CartPole-v1", 
-                        help="Gym環境名稱")
+                        help="Gym environment name")
     parser.add_argument("--expert_data", type=str, 
-                        help="專家軌跡檔案路徑（用於比較）")
+                        help="Path to expert trajectory file (for comparison)")
     
-    # 評估設置
+    # Evaluation settings
     parser.add_argument("--n_eval_episodes", type=int, default=20,
-                        help="評估的回合數")
+                        help="Number of episodes to evaluate")
     parser.add_argument("--seed", type=int, default=0,
-                        help="隨機種子")
+                        help="Random seed")
     parser.add_argument("--max_ep_len", type=int, default=1000,
-                        help="最大回合長度")
+                        help="Maximum episode length")
     
-    # 可視化設置
+    # Visualization settings
     parser.add_argument("--render", action="store_true",
-                        help="渲染環境")
+                        help="Render the environment")
     parser.add_argument("--save_video", action="store_true",
-                        help="保存評估視頻")
+                        help="Save evaluation video")
     parser.add_argument("--video_path", type=str, default="./data/videos",
-                        help="視頻保存路徑")
+                        help="Path to save videos")
     parser.add_argument("--plot_path", type=str, default="./data/plots",
-                        help="圖表保存路徑")
+                        help="Path to save plots")
     
-    # 設備設置
+    # Device settings
     parser.add_argument("--device", type=str, default="cuda",
-                        help="運行設備 (cuda 或 cpu)")
+                        help="Device to run on (cuda or cpu)")
     
-    # 策略網絡設置
+    # Policy network settings
     parser.add_argument("--hidden_dims", type=str, default="64,64",
-                        help="策略網絡隱藏層維度，用逗號分隔，例如：64,64")
+                        help="Policy network hidden layer dimensions, comma-separated, e.g.: 64,64")
     
     return parser.parse_args()
 
 
 def load_policy(model_path, env, device, hidden_dims_str="64,64"):
-    """加載已訓練的策略。"""
-    # 解析隱藏層維度
+    """Load the trained policy."""
+    # Parse hidden layer dimensions
     hidden_dims = tuple(int(dim) for dim in hidden_dims_str.split(','))
-    print(f"使用隱藏層維度: {hidden_dims}")
+    print(f"Using hidden layer dimensions: {hidden_dims}")
     
-    # 確定動作空間類型
+    # Determine action space type
     if isinstance(env.action_space, gym.spaces.Discrete):
         is_discrete = True
         action_dim = env.action_space.n
@@ -73,10 +73,10 @@ def load_policy(model_path, env, device, hidden_dims_str="64,64"):
         is_discrete = False
         action_dim = env.action_space.shape[0]
     
-    # 獲取狀態維度
+    # Get state dimension
     state_dim = env.observation_space.shape[0]
     
-    # 根據動作空間類型創建相應的策略
+    # Create the appropriate policy based on action space type
     if is_discrete:
         policy = DiscretePolicy(
             state_dim=state_dim,
@@ -92,30 +92,30 @@ def load_policy(model_path, env, device, hidden_dims_str="64,64"):
             device=device
         )
     
-    # 加載檢查點
-    print(f"正在從 {model_path} 加載模型...")
+    # Load checkpoint
+    print(f"Loading model from {model_path}...")
     try:
         checkpoint = torch.load(model_path, map_location=device)
-        print(f"成功加載檢查點，檢查點類型: {type(checkpoint)}")
+        print(f"Successfully loaded checkpoint, checkpoint type: {type(checkpoint)}")
         
-        # 檢查檢查點結構並打印鍵以便調試
+        # Check checkpoint structure and print keys for debugging
         if isinstance(checkpoint, dict):
-            print(f"檢查點包含以下鍵: {list(checkpoint.keys())}")
+            print(f"Checkpoint contains the following keys: {list(checkpoint.keys())}")
     except Exception as e:
-        print(f"加載檢查點出錯: {e}")
+        print(f"Error loading checkpoint: {e}")
         raise
     
-    # 嘗試不同的方式加載模型
+    # Try different ways to load the model
     try:
         if isinstance(checkpoint, dict):
-            # 情況1: 標準字典格式，包含 "policy" 鍵
+            # Case 1: Standard dictionary format with "policy" key
             if "policy" in checkpoint:
-                print("使用 'policy' 鍵加載模型")
+                print("Loading model using 'policy' key")
                 policy.load_state_dict(checkpoint["policy"])
-            # 情況2: GAIL 保存的完整模型，包含 "discriminator" 鍵
+            # Case 2: Full GAIL model saved with "discriminator" key
             elif "discriminator" in checkpoint:
-                print("使用 GAIL 模型格式加載")
-                # 創建一個包含必要結構的模擬專家數據
+                print("Loading using GAIL model format")
+                # Create a dummy expert data with necessary structure
                 state_sample = np.zeros((1, state_dim), dtype=np.float32)
                 if is_discrete:
                     action_sample = np.array([0], dtype=np.int64)
@@ -134,66 +134,66 @@ def load_policy(model_path, env, device, hidden_dims_str="64,64"):
                     "std_return": 0.0
                 }
                 
-                # 創建 GAIL 實例
+                # Create GAIL instance
                 gail = GAIL(
                     policy=policy,
                     expert_trajectories=dummy_expert_data,
                     device=device
                 )
                 
-                # 加載判別器和策略
+                # Load discriminator and policy
                 gail.discriminator.load_state_dict(checkpoint["discriminator"])
                 
-                # 檢查策略相關鍵
+                # Check for policy-related keys
                 policy_keys = [k for k in checkpoint.keys() if "policy" in k.lower()]
                 if policy_keys:
-                    print(f"找到策略相關鍵: {policy_keys}")
+                    print(f"Found policy-related keys: {policy_keys}")
                     for k in policy_keys:
                         try:
                             policy.load_state_dict(checkpoint[k])
-                            print(f"使用 '{k}' 成功加載策略")
+                            print(f"Successfully loaded policy using '{k}'")
                             break
                         except Exception as e:
-                            print(f"嘗試加載 '{k}' 失敗: {e}")
+                            print(f"Failed to load using '{k}': {e}")
                 else:
-                    print("未找到策略相關鍵，嘗試直接將模型參數加載到策略中")
-            # 情況3: 直接是策略的狀態字典
+                    print("No policy-related keys found, trying to load model parameters directly to policy")
+            # Case 3: Checkpoint is directly the policy state dict
             else:
-                print("嘗試直接將檢查點加載為策略狀態字典")
+                print("Trying to load checkpoint directly as policy state dict")
                 try:
                     policy.load_state_dict(checkpoint)
                 except Exception as e:
-                    print(f"直接加載失敗: {e}")
+                    print(f"Direct loading failed: {e}")
                     
-                    # 情況4: 檢查點可能包含其他命名方式的策略
-                    print("嘗試查找其他可能的策略鍵...")
+                    # Case 4: Checkpoint might contain policy under other naming
+                    print("Trying to find other possible policy keys...")
                     potential_keys = ['actor', 'model', 'net', 'network', 'state_dict']
                     
                     for key in potential_keys:
                         if key in checkpoint:
                             try:
-                                print(f"嘗試使用 '{key}' 鍵加載策略")
+                                print(f"Trying to load policy using '{key}' key")
                                 policy.load_state_dict(checkpoint[key])
-                                print(f"使用 '{key}' 成功加載策略")
+                                print(f"Successfully loaded policy using '{key}'")
                                 break
                             except Exception as e:
-                                print(f"嘗試加載 '{key}' 失敗: {e}")
-        # 情況5: 檢查點直接是模型參數
+                                print(f"Failed to load using '{key}': {e}")
+        # Case 5: Checkpoint is directly the model parameters
         else:
-            print("檢查點不是字典格式，嘗試直接加載")
+            print("Checkpoint is not a dictionary format, trying to load directly")
             policy.load_state_dict(checkpoint)
         
-        print("策略加載成功！")
+        print("Policy loading successful!")
     except Exception as e:
-        print(f"所有加載嘗試均失敗: {e}")
-        print("正在建立一個新的策略模型...")
+        print(f"All loading attempts failed: {e}")
+        print("Creating a new policy model...")
     
-    policy.eval()  # 設置為評估模式
+    policy.eval()  # Set to evaluation mode
     return policy, is_discrete
 
 
 def evaluate_policy_with_data_collection(policy, env, args, is_discrete):
-    """評估策略並收集數據用於可視化。"""
+    """Evaluate policy and collect data for visualization."""
     returns = []
     lengths = []
     
@@ -201,7 +201,7 @@ def evaluate_policy_with_data_collection(policy, env, args, is_discrete):
     all_actions = []
     all_rewards = []
     
-    # 如果要保存視頻
+    # If we want to save video
     frames = []
     
     for i in range(args.n_eval_episodes):
@@ -215,38 +215,38 @@ def evaluate_policy_with_data_collection(policy, env, args, is_discrete):
         episode_length = 0
         
         while not done and episode_length < args.max_ep_len:
-            # 安全地嘗試渲染，如果失敗則輸出警告而不終止程式
+            # Safely try to render, if it fails output a warning without terminating the program
             if args.render or args.save_video:
                 try:
                     frame = env.render()
                     if args.save_video and frame is not None:
                         frames.append(frame)
                 except Exception as e:
-                    if episode_length == 0:  # 只在每個回合的第一步輸出警告
-                        print(f"警告: 渲染環境時出錯: {e}")
-                        print("繼續評估但不進行渲染。如需渲染，請安裝必要的依賴: pip install pygame")
-                        # 關閉渲染以避免重複錯誤
+                    if episode_length == 0:  # Only output warning on first step of each episode
+                        print(f"Warning: Error rendering environment: {e}")
+                        print("Continuing evaluation without rendering. For rendering, install necessary dependencies: pip install pygame")
+                        # Turn off rendering to avoid repeated errors
                         args.render = False
                         if args.save_video:
-                            print("視頻保存功能已停用")
+                            print("Video saving feature has been disabled")
                             args.save_video = False
             
-            # 從策略獲取動作
+            # Get action from policy
             if is_discrete:
                 action, _, _ = policy.get_action(state, deterministic=True)
             else:
                 action, _, _ = policy.get_action(state, deterministic=True)
             
-            # 在環境中執行動作
+            # Execute action in environment
             next_state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             
-            # 保存數據
+            # Save data
             states.append(state)
             actions.append(action)
             rewards.append(reward)
             
-            # 為下一次迭代更新
+            # Update for next iteration
             state = next_state
             episode_return += reward
             episode_length += 1
@@ -258,7 +258,7 @@ def evaluate_policy_with_data_collection(policy, env, args, is_discrete):
         all_actions.extend(actions)
         all_rewards.extend(rewards)
         
-        print(f"回合 {i+1}/{args.n_eval_episodes} - 回報: {episode_return:.2f}, 長度: {episode_length}")
+        print(f"Episode {i+1}/{args.n_eval_episodes} - Return: {episode_return:.2f}, Length: {episode_length}")
     
     mean_return = np.mean(returns)
     std_return = np.std(returns)
@@ -277,7 +277,7 @@ def evaluate_policy_with_data_collection(policy, env, args, is_discrete):
         "rewards": np.array(all_rewards)
     }
     
-    # 保存視頻
+    # Save video
     if args.save_video and frames:
         save_video(frames, args.video_path, env.spec.id)
     
@@ -285,11 +285,11 @@ def evaluate_policy_with_data_collection(policy, env, args, is_discrete):
 
 
 def compare_with_expert(evaluation_data, expert_data, args):
-    """比較模型與專家表現。"""
-    # 創建比較圖
+    """Compare model performance with expert performance."""
+    # Create comparison plots
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     
-    # 回報比較
+    # Return comparison
     ax = axes[0]
     model_returns = evaluation_data["returns"]
     expert_returns = expert_data["episode_returns"]
@@ -297,26 +297,26 @@ def compare_with_expert(evaluation_data, expert_data, args):
     ax.axhline(y=evaluation_data["mean_return"], color='b', linestyle='-', alpha=0.5)
     ax.axhline(y=expert_data["mean_return"], color='r', linestyle='-', alpha=0.5)
     
-    ax.boxplot([model_returns, expert_returns], labels=["GAIL模型", "專家"])
-    ax.set_title("回報分布比較")
-    ax.set_ylabel("總回報")
+    ax.boxplot([model_returns, expert_returns], labels=["GAIL Model", "Expert"])
+    ax.set_title("Return Distribution Comparison")
+    ax.set_ylabel("Total Return")
     
-    # 為平均值添加註解
-    ax.annotate(f'平均: {evaluation_data["mean_return"]:.2f}', 
+    # Add annotations for means
+    ax.annotate(f'Mean: {evaluation_data["mean_return"]:.2f}', 
                 xy=(1, evaluation_data["mean_return"]), 
                 xycoords=('data', 'data'),
                 xytext=(0, 10), textcoords='offset points',
                 ha='center', va='bottom',
                 color='blue')
     
-    ax.annotate(f'平均: {expert_data["mean_return"]:.2f}', 
+    ax.annotate(f'Mean: {expert_data["mean_return"]:.2f}', 
                 xy=(2, expert_data["mean_return"]), 
                 xycoords=('data', 'data'),
                 xytext=(0, 10), textcoords='offset points',
                 ha='center', va='bottom',
                 color='red')
     
-    # 回合長度比較
+    # Episode length comparison
     ax = axes[1]
     model_lengths = evaluation_data["lengths"]
     expert_lengths = expert_data["episode_lengths"]
@@ -324,19 +324,19 @@ def compare_with_expert(evaluation_data, expert_data, args):
     ax.axhline(y=evaluation_data["mean_length"], color='b', linestyle='-', alpha=0.5)
     ax.axhline(y=np.mean(expert_lengths), color='r', linestyle='-', alpha=0.5)
     
-    ax.boxplot([model_lengths, expert_lengths], labels=["GAIL模型", "專家"])
-    ax.set_title("回合長度比較")
-    ax.set_ylabel("步數")
+    ax.boxplot([model_lengths, expert_lengths], labels=["GAIL Model", "Expert"])
+    ax.set_title("Episode Length Comparison")
+    ax.set_ylabel("Steps")
     
-    # 為平均值添加註解
-    ax.annotate(f'平均: {evaluation_data["mean_length"]:.2f}', 
+    # Add annotations for means
+    ax.annotate(f'Mean: {evaluation_data["mean_length"]:.2f}', 
                 xy=(1, evaluation_data["mean_length"]), 
                 xycoords=('data', 'data'),
                 xytext=(0, 10), textcoords='offset points',
                 ha='center', va='bottom',
                 color='blue')
     
-    ax.annotate(f'平均: {np.mean(expert_lengths):.2f}', 
+    ax.annotate(f'Mean: {np.mean(expert_lengths):.2f}', 
                 xy=(2, np.mean(expert_lengths)), 
                 xycoords=('data', 'data'),
                 xytext=(0, 10), textcoords='offset points',
@@ -345,13 +345,13 @@ def compare_with_expert(evaluation_data, expert_data, args):
     
     plt.tight_layout()
     
-    # 保存圖表
+    # Save the plot
     os.makedirs(args.plot_path, exist_ok=True)
     plt.savefig(os.path.join(args.plot_path, f"comparison_{args.env}.png"), dpi=300)
     
-    # 生成軌跡或狀態-動作熱圖（如果維度允許）
+    # Generate trajectory or state-action heatmaps (if dimensionality allows)
     try:
-        if evaluation_data["states"].shape[1] == 2:  # 2D狀態空間
+        if evaluation_data["states"].shape[1] == 2:  # 2D state space
             plot_state_distributions(
                 evaluation_data["states"], 
                 expert_data["states"], 
@@ -359,7 +359,7 @@ def compare_with_expert(evaluation_data, expert_data, args):
                 args.env
             )
         
-        if not isinstance(evaluation_data["actions"][0], (int, np.integer)):  # 連續動作空間
+        if not isinstance(evaluation_data["actions"][0], (int, np.integer)):  # Continuous action space
             if len(evaluation_data["actions"].shape) > 1 and evaluation_data["actions"].shape[1] <= 2:
                 plot_action_distributions(
                     evaluation_data["actions"], 
@@ -368,16 +368,16 @@ def compare_with_expert(evaluation_data, expert_data, args):
                     args.env
                 )
     except Exception as e:
-        print(f"生成分布圖時出錯: {e}")
+        print(f"Error generating distribution plots: {e}")
     
     return fig
 
 
 def plot_state_distributions(model_states, expert_states, plot_path, env_name):
-    """繪製狀態分布比較。"""
+    """Plot state distribution comparison."""
     plt.figure(figsize=(10, 8))
     
-    # 將狀態空間縮減為2D（如果維度更高）
+    # Reduce state space to 2D (if higher dimensions)
     if model_states.shape[1] > 2:
         from sklearn.decomposition import PCA
         pca = PCA(n_components=2)
@@ -387,97 +387,97 @@ def plot_state_distributions(model_states, expert_states, plot_path, env_name):
         model_states_2d = model_states
         expert_states_2d = expert_states
     
-    # 繪製密度圖
+    # Plot density maps
     sns.kdeplot(x=model_states_2d[:, 0], y=model_states_2d[:, 1], 
-                cmap="Blues", fill=True, alpha=0.5, label="GAIL模型")
+                cmap="Blues", fill=True, alpha=0.5, label="GAIL Model")
     sns.kdeplot(x=expert_states_2d[:, 0], y=expert_states_2d[:, 1], 
-                cmap="Reds", fill=True, alpha=0.5, label="專家")
+                cmap="Reds", fill=True, alpha=0.5, label="Expert")
     
-    plt.title(f"{env_name} - 狀態分布比較")
-    plt.xlabel("狀態維度 1")
-    plt.ylabel("狀態維度 2")
+    plt.title(f"{env_name} - State Distribution Comparison")
+    plt.xlabel("State Dimension 1")
+    plt.ylabel("State Dimension 2")
     plt.legend()
     
-    # 保存圖表
+    # Save the plot
     plt.savefig(os.path.join(plot_path, f"state_distribution_{env_name}.png"), dpi=300)
 
 
 def plot_action_distributions(model_actions, expert_actions, plot_path, env_name):
-    """繪製動作分布比較。"""
+    """Plot action distribution comparison."""
     plt.figure(figsize=(10, 8))
     
-    # 處理動作維度
+    # Handle action dimensions
     if len(model_actions.shape) > 1 and model_actions.shape[1] > 1:
-        # 2D動作空間
+        # 2D action space
         sns.kdeplot(x=model_actions[:, 0], y=model_actions[:, 1], 
-                    cmap="Blues", fill=True, alpha=0.5, label="GAIL模型")
+                    cmap="Blues", fill=True, alpha=0.5, label="GAIL Model")
         sns.kdeplot(x=expert_actions[:, 0], y=expert_actions[:, 1], 
-                    cmap="Reds", fill=True, alpha=0.5, label="專家")
+                    cmap="Reds", fill=True, alpha=0.5, label="Expert")
         
-        plt.xlabel("動作維度 1")
-        plt.ylabel("動作維度 2")
+        plt.xlabel("Action Dimension 1")
+        plt.ylabel("Action Dimension 2")
     else:
-        # 1D動作空間
-        sns.kdeplot(model_actions, fill=True, color="blue", alpha=0.5, label="GAIL模型")
-        sns.kdeplot(expert_actions, fill=True, color="red", alpha=0.5, label="專家")
+        # 1D action space
+        sns.kdeplot(model_actions, fill=True, color="blue", alpha=0.5, label="GAIL Model")
+        sns.kdeplot(expert_actions, fill=True, color="red", alpha=0.5, label="Expert")
         
-        plt.xlabel("動作值")
-        plt.ylabel("密度")
+        plt.xlabel("Action Value")
+        plt.ylabel("Density")
     
-    plt.title(f"{env_name} - 動作分布比較")
+    plt.title(f"{env_name} - Action Distribution Comparison")
     plt.legend()
     
-    # 保存圖表
+    # Save the plot
     plt.savefig(os.path.join(plot_path, f"action_distribution_{env_name}.png"), dpi=300)
 
 
 def save_video(frames, video_path, env_name):
-    """保存回合視頻。"""
+    """Save episode video."""
     os.makedirs(video_path, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     video_file = os.path.join(video_path, f"{env_name}_{timestamp}.mp4")
     
-    # 使用imageio保存視頻
+    # Save video using imageio
     imageio.mimsave(video_file, frames, fps=30)
-    print(f"視頻已保存到 {video_file}")
+    print(f"Video saved to {video_file}")
     return video_file
 
 
 def generate_summary_report(evaluation_data, expert_data, args):
-    """生成評估摘要報告。"""
+    """Generate evaluation summary report."""
     report = {
-        "環境": args.env,
-        "評估回合數": args.n_eval_episodes,
-        "模型路徑": args.model_path,
-        "評估時間": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "模型表現": {
-            "平均回報": f"{evaluation_data['mean_return']:.2f} ± {evaluation_data['std_return']:.2f}",
-            "平均回合長度": f"{evaluation_data['mean_length']:.2f} ± {evaluation_data['std_length']:.2f}",
-            "最高回報": f"{max(evaluation_data['returns']):.2f}",
-            "最低回報": f"{min(evaluation_data['returns']):.2f}"
+        "Environment": args.env,
+        "Number of Evaluation Episodes": args.n_eval_episodes,
+        "Model Path": args.model_path,
+        "Evaluation Time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "Model Performance": {
+            "Average Return": f"{evaluation_data['mean_return']:.2f} ± {evaluation_data['std_return']:.2f}",
+            "Average Episode Length": f"{evaluation_data['mean_length']:.2f} ± {evaluation_data['std_length']:.2f}",
+            "Highest Return": f"{max(evaluation_data['returns']):.2f}",
+            "Lowest Return": f"{min(evaluation_data['returns']):.2f}"
         }
     }
     
     if expert_data:
-        report["專家表現"] = {
-            "平均回報": f"{expert_data['mean_return']:.2f} ± {expert_data['std_return']:.2f}",
-            "平均回合長度": f"{np.mean(expert_data['episode_lengths']):.2f} ± {np.std(expert_data['episode_lengths']):.2f}",
-            "最高回報": f"{max(expert_data['episode_returns']):.2f}",
-            "最低回報": f"{min(expert_data['episode_returns']):.2f}"
+        report["Expert Performance"] = {
+            "Average Return": f"{expert_data['mean_return']:.2f} ± {expert_data['std_return']:.2f}",
+            "Average Episode Length": f"{np.mean(expert_data['episode_lengths']):.2f} ± {np.std(expert_data['episode_lengths']):.2f}",
+            "Highest Return": f"{max(expert_data['episode_returns']):.2f}",
+            "Lowest Return": f"{min(expert_data['episode_returns']):.2f}"
         }
         
-        # 計算模型與專家的表現差距
+        # Calculate performance gap between model and expert
         model_mean = evaluation_data['mean_return']
         expert_mean = expert_data['mean_return']
         performance_gap = model_mean - expert_mean
         performance_percentage = (model_mean / expert_mean) * 100 if expert_mean != 0 else float('inf')
         
-        report["與專家對比"] = {
-            "絕對差距": f"{performance_gap:.2f}",
-            "相對表現": f"{performance_percentage:.2f}%"
+        report["Comparison with Expert"] = {
+            "Absolute Gap": f"{performance_gap:.2f}",
+            "Relative Performance": f"{performance_percentage:.2f}%"
         }
     
-    # 保存報告
+    # Save report
     os.makedirs(args.plot_path, exist_ok=True)
     report_path = os.path.join(args.plot_path, f"evaluation_report_{args.env}.txt")
     
@@ -491,77 +491,77 @@ def generate_summary_report(evaluation_data, expert_data, args):
                 f.write(f"{section}: {content}\n")
             f.write("\n")
     
-    print(f"評估報告已保存到 {report_path}")
+    print(f"Evaluation report saved to {report_path}")
     return report
 
 
 def main(args):
-    """主評估函數。"""
-    # 設置隨機種子
+    """Main evaluation function."""
+    # Set random seed
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     
-    # 嘗試安裝所需的依賴
+    # Try to install required dependencies
     if args.render or args.save_video:
         try:
             import importlib
             if not importlib.util.find_spec("pygame"):
-                print("正在嘗試安裝 pygame...")
+                print("Attempting to install pygame...")
                 import subprocess
                 subprocess.check_call([sys.executable, "-m", "pip", "install", "pygame"])
-                print("pygame 安裝成功！")
+                print("pygame installation successful!")
         except Exception as e:
-            print(f"無法自動安裝 pygame: {e}")
-            print("繼續執行但可能無法渲染環境")
+            print(f"Could not automatically install pygame: {e}")
+            print("Continuing but may not be able to render the environment")
     
-    # 創建環境
+    # Create environment
     try:
         env = gym.make(args.env, render_mode="rgb_array" if args.render or args.save_video else None)
     except Exception as e:
-        print(f"使用 render_mode 創建環境時出錯: {e}")
-        print("嘗試不指定 render_mode 創建環境...")
+        print(f"Error creating environment with render_mode: {e}")
+        print("Trying to create environment without specifying render_mode...")
         env = gym.make(args.env)
         if args.render or args.save_video:
-            print("警告: 環境創建時未指定渲染模式，可能無法保存視頻")
+            print("Warning: Environment created without render mode, may not be able to save video")
     
-    # 加載策略
-    print(f"從 {args.model_path} 加載模型...")
+    # Load policy
+    print(f"Loading model from {args.model_path}...")
     policy, is_discrete = load_policy(args.model_path, env, args.device, args.hidden_dims)
     
-    # 評估策略
-    print(f"在 {args.env} 環境中評估 {args.n_eval_episodes} 個回合...")
+    # Evaluate policy
+    print(f"Evaluating {args.n_eval_episodes} episodes in {args.env} environment...")
     evaluation_data = evaluate_policy_with_data_collection(policy, env, args, is_discrete)
     
-    # 打印評估結果
-    print("\n=== 評估結果 ===")
-    print(f"平均回報: {evaluation_data['mean_return']:.2f} ± {evaluation_data['std_return']:.2f}")
-    print(f"平均回合長度: {evaluation_data['mean_length']:.2f} ± {evaluation_data['std_length']:.2f}")
-    print(f"最高回報: {max(evaluation_data['returns']):.2f}")
-    print(f"最低回報: {min(evaluation_data['returns']):.2f}")
+    # Print evaluation results
+    print("\n=== Evaluation Results ===")
+    print(f"Average return: {evaluation_data['mean_return']:.2f} ± {evaluation_data['std_return']:.2f}")
+    print(f"Average episode length: {evaluation_data['mean_length']:.2f} ± {evaluation_data['std_length']:.2f}")
+    print(f"Highest return: {max(evaluation_data['returns']):.2f}")
+    print(f"Lowest return: {min(evaluation_data['returns']):.2f}")
     
-    # 如果提供了專家數據，則進行比較
+    # If expert data is provided, compare with it
     expert_data = None
     if args.expert_data:
-        print(f"\n從 {args.expert_data} 加載專家數據...")
+        print(f"\nLoading expert data from {args.expert_data}...")
         expert_data = load_expert_trajectories(args.expert_data)
         
-        print("\n=== 與專家對比 ===")
-        print(f"GAIL模型平均回報: {evaluation_data['mean_return']:.2f}")
-        print(f"專家平均回報: {expert_data['mean_return']:.2f}")
+        print("\n=== Comparison with Expert ===")
+        print(f"GAIL model average return: {evaluation_data['mean_return']:.2f}")
+        print(f"Expert average return: {expert_data['mean_return']:.2f}")
         
-        # 生成比較圖
+        # Generate comparison plots
         compare_with_expert(evaluation_data, expert_data, args)
     
-    # 生成評估報告
+    # Generate evaluation report
     report = generate_summary_report(evaluation_data, expert_data, args)
     
-    # 關閉環境
+    # Close environment
     env.close()
     
-    print("\n評估完成！")
+    print("\nEvaluation complete!")
     if args.save_video:
-        print(f"視頻已保存到 {args.video_path} 目錄")
-    print(f"圖表已保存到 {args.plot_path} 目錄")
+        print(f"Videos saved to {args.video_path} directory")
+    print(f"Plots saved to {args.plot_path} directory")
 
 
 if __name__ == "__main__":

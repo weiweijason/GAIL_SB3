@@ -301,11 +301,11 @@ def main(args):
         )
         print(f"Created continuous policy with state_dim={state_dim}, action_dim={action_dim}")
     
-    # 添加網絡架構圖
+    # Add network architecture graph
     if args.log_graph:
         dummy_input = torch.zeros((1, state_dim)).to(args.device)
         if is_discrete:
-            # 對於離散政策，紀錄前向傳遞的計算圖
+            # For discrete policy, record computation graph of forward pass
             writer.add_graph(policy, dummy_input)
     
     # Load expert trajectories
@@ -468,7 +468,7 @@ def main(args):
                 writer.add_scalar('eval/return', eval_return, timesteps_so_far)
                 writer.add_scalar('eval/length', eval_length, timesteps_so_far)
                 
-                # 添加政策網絡參數分佈
+                # Add policy network parameter distribution
                 for name, param in policy.named_parameters():
                     writer.add_histogram(f'parameters/{name}', param.data, timesteps_so_far)
                     if param.grad is not None:

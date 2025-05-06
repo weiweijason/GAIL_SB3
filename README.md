@@ -14,6 +14,7 @@
 - **可配置的訓練參數**：通過配置文件輕鬆調整訓練設置
 - **與Gym環境相容**：可與任何標準Gym環境一起使用
 - **專家數據收集工具**：輕鬆從預訓練模型收集專家軌跡
+- **詳細的評估與視覺化**：全面的模型評估和豐富的視覺化工具
 
 ## 代碼風格指南
 
@@ -39,6 +40,11 @@
 
 ```bash
 pip install -r requirements.txt
+```
+
+若需要環境渲染和視頻生成功能，請確保安裝以下依賴：
+```bash
+pip install pygame imageio imageio-ffmpeg matplotlib scikit-image
 ```
 
 ### GPU支援
@@ -106,9 +112,79 @@ tensorboard --logdir=./data/logs
 - 政策損失、價值損失和熵
 - 網絡參數分佈等
 
-### 4. 評估訓練的策略
+### 4. 評估與視覺化
 
-在訓練過程中，GAIL會定期評估策略的性能。您也可以使用訓練腳本中的`evaluate_policy`函數手動評估模型。最終模型會保存在指定的日誌目錄下。
+#### 4.1 標準評估
+
+模型訓練完成後，您可以使用評估腳本來評估模型的表現：
+
+```bash
+python -m gail_pytorch.scripts.evaluate_visualize_gail \
+    --model_path ./data/logs/gail_model_final.pt \
+    --env CartPole-v1 \
+    --expert_data ./data/expert_trajectories/cartpole_expert.pkl \
+    --n_eval_episodes 20 \
+    --hidden_dims 64,64 \
+    --plot_path ./data/plots
+```
+
+重要參數說明：
+- `model_path`: 訓練好的模型檔案路徑
+- `hidden_dims`: 策略網絡的隱藏層維度，需要與訓練時使用的維度一致
+- `plot_path`: 評估圖表保存路徑
+
+如需生成評估視頻，可以添加以下參數：
+```bash
+--render --save_video --video_path ./data/videos
+```
+
+#### 4.2 模型調試
+
+若遇到模型加載或評估問題，可以使用調試腳本來詳細分析模型：
+
+```bash
+python -m gail_pytorch.scripts.debug_model \
+    --model_path ./data/logs/gail_model_final.pt \
+    --env CartPole-v1 \
+    --hidden_dims 64,64
+```
+
+此腳本會提供詳細的模型結構分析和逐步的評估信息，幫助診斷問題。
+
+#### 4.3 創建比較視頻
+
+為了更直觀地分析GAIL模型的表現，您可以創建GAIL模型與專家行為的並排比較視頻：
+
+```bash
+python -m gail_pytorch.scripts.create_comparison_video \
+    --gail_model_path ./data/logs/gail_model_final.pt \
+    --expert_data ./data/expert_trajectories/cartpole_expert.pkl \
+    --env CartPole-v1 \
+    --n_episodes 3 \
+    --hidden_dims 64,64 \
+    --output_path ./data/videos/comparison
+```
+
+這將生成並排顯示GAIL模型和專家行為的比較視頻，以便直觀評估模型的模仿效果。主要參數：
+- `gail_model_path`: GAIL模型路徑
+- `expert_data`: 專家數據路徑
+- `n_episodes`: 要比較的回合數
+- `output_path`: 輸出視頻保存路徑
+
+### 5. 視頻分析指南
+
+觀看評估視頻時，請注意以下關鍵方面：
+
+1. **任務完成度**：模型是否能成功完成任務（例如，平衡桿子的時間）
+2. **行為相似性**：模型的行為是否與專家相似
+3. **動作平滑度**：模型的動作是否平滑，還是有抖動或不自然的行為
+4. **失敗模式**：觀察模型失敗的方式，可以揭示訓練中的弱點
+5. **適應性**：模型對不同初始狀態的適應能力
+
+並排比較視頻還應特別關注：
+- **動作一致性**：GAIL模型的動作是否與專家在相似情況下的動作一致
+- **反應時機**：模型是否在與專家相同的時機做出反應
+- **穩定性**：模型控制是否像專家一樣穩定
 
 ## 專案結構
 
@@ -120,14 +196,19 @@ gail_pytorch/
 ├── data/             # 數據目錄
 │   ├── expert_trajectories/ # 專家示範數據
 │   ├── logs/         # 訓練日誌
+│   ├── plots/        # 評估圖表
+│   ├── videos/       # 評估視頻
 │   └── models/       # 保存的模型
 ├── envs/             # 環境包裝器和自定義環境
 ├── models/           # 神經網絡模型定義
 │   ├── gail.py       # GAIL核心實現
 │   └── policy.py     # 策略網絡實現
 ├── scripts/          # 訓練和評估腳本
-│   ├── collect_expert_data.py # 收集專家數據
-│   └── train_gail.py # GAIL訓練腳本
+│   ├── collect_expert_data.py     # 收集專家數據
+│   ├── train_gail.py              # GAIL訓練腳本
+│   ├── evaluate_visualize_gail.py # 評估與視覺化
+│   ├── debug_model.py             # 模型調試工具
+│   └── create_comparison_video.py # 比較視頻生成
 └── utils/            # 工具函數
     └── expert_trajectories.py # 專家軌跡處理
 ```
@@ -150,6 +231,42 @@ GAIL基於Ho & Ermon (2016)的論文《Generative Adversarial Imitation Learning
 - 多輪策略更新，提高樣本效率
 - 價值函數共享，優化獎勵信號
 
+### 模型保存與加載
+
+在訓練過程中，GAIL會保存完整的模型狀態，包括：
+- 判別器參數（discriminator）
+- 策略網絡參數（policy）
+- 優化器狀態（disc_optimizer）
+- 訓練迭代次數（iterations）
+
+為了確保評估時能正確加載模型，需要注意：
+1. 使用與訓練時相同的隱藏層維度（通常為64,64）
+2. 正確指定模型路徑
+3. 若遇到加載問題，可使用調試工具詳細分析
+
+## 常見問題解決
+
+### 1. 模型加載錯誤
+
+如果您遇到 "size mismatch" 等模型加載錯誤，請確保：
+- 使用與訓練時相同的網絡結構（透過 --hidden_dims 參數指定）
+- 模型檔案未損壞
+- 使用正確版本的PyTorch和依賴庫
+
+### 2. 渲染相關錯誤
+
+若遇到 "pygame is not installed" 等渲染錯誤，請安裝所需依賴：
+```bash
+pip install pygame imageio imageio-ffmpeg
+```
+
+### 3. CUDA相關錯誤
+
+若出現CUDA錯誤，請檢查：
+- 您的系統是否有可用的GPU
+- PyTorch是否正確配置為使用GPU
+- 嘗試使用 --device cpu 參數在CPU上運行
+
 ## 未來擴展
 
 - 添加新的模仿學習算法(如AIRL, VAIL)
@@ -163,6 +280,8 @@ GAIL基於Ho & Ermon (2016)的論文《Generative Adversarial Imitation Learning
 ## 實測效果
 
 在CartPole-v1環境測試中，優化後的GAIL實作能夠從專家示範中成功學習，達到與專家相當的表現（500分滿分）。訓練過程穩定，通常在10分鐘內完成。
+
+使用比較視頻分析可以看出，成功訓練的GAIL模型能夠精確地模仿專家的動作模式，在CartPole環境中展現出與專家相似的穩定平衡能力。
 
 ## 引用
 
