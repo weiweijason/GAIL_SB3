@@ -82,6 +82,10 @@ def parse_args():
     parser.add_argument("--max_grad_norm", type=float, default=0.5,
                         help="Maximum gradient norm for clipping")
     
+    # New argument for logging graph
+    parser.add_argument("--log_graph", action="store_true",
+                        help="Log network architecture graph to TensorBoard")
+    
     return parser.parse_args()
 
 
@@ -297,6 +301,13 @@ def main(args):
         )
         print(f"Created continuous policy with state_dim={state_dim}, action_dim={action_dim}")
     
+    # 添加網絡架構圖
+    if args.log_graph:
+        dummy_input = torch.zeros((1, state_dim)).to(args.device)
+        if is_discrete:
+            # 對於離散政策，紀錄前向傳遞的計算圖
+            writer.add_graph(policy, dummy_input)
+    
     # Load expert trajectories
     expert_trajectories = load_expert_trajectories(args.expert_data)
     print(f"Expert mean return: {expert_trajectories['mean_return']:.2f}")
@@ -456,6 +467,13 @@ def main(args):
                 eval_return, eval_length = evaluate_policy(policy, env, args, args.n_eval_episodes)
                 writer.add_scalar('eval/return', eval_return, timesteps_so_far)
                 writer.add_scalar('eval/length', eval_length, timesteps_so_far)
+                
+                # 添加政策網絡參數分佈
+                for name, param in policy.named_parameters():
+                    writer.add_histogram(f'parameters/{name}', param.data, timesteps_so_far)
+                    if param.grad is not None:
+                        writer.add_histogram(f'gradients/{name}', param.grad.data, timesteps_so_far)
+                
                 print(f"Evaluation at {timesteps_so_far} timesteps: Mean return = {eval_return:.2f}, Mean length = {eval_length:.2f}")
         
         # Episode is done
