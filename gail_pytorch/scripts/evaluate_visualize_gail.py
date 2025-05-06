@@ -91,48 +91,102 @@ def load_policy(model_path, env, device):
         )
     
     # 加載檢查點
-    checkpoint = torch.load(model_path, map_location=device)
+    print(f"正在從 {model_path} 加載模型...")
+    try:
+        checkpoint = torch.load(model_path, map_location=device)
+        print(f"成功加載檢查點，檢查點類型: {type(checkpoint)}")
+        
+        # 檢查檢查點結構並打印鍵以便調試
+        if isinstance(checkpoint, dict):
+            print(f"檢查點包含以下鍵: {list(checkpoint.keys())}")
+    except Exception as e:
+        print(f"加載檢查點出錯: {e}")
+        raise
     
-    # 判斷是GAIL模型還是單純的策略模型
-    if "policy" in checkpoint:
-        policy.load_state_dict(checkpoint["policy"])
-    else:
-        # 創建一個包含必要結構的模擬專家數據
-        # 確保數據中包含非空的states和actions，以通過GAIL初始化檢查
-        state_sample = np.zeros((1, state_dim), dtype=np.float32)
-        if is_discrete:
-            action_sample = np.array([0], dtype=np.int64)
+    # 嘗試不同的方式加載模型
+    try:
+        if isinstance(checkpoint, dict):
+            # 情況1: 標準字典格式，包含 "policy" 鍵
+            if "policy" in checkpoint:
+                print("使用 'policy' 鍵加載模型")
+                policy.load_state_dict(checkpoint["policy"])
+            # 情況2: GAIL 保存的完整模型，包含 "discriminator" 鍵
+            elif "discriminator" in checkpoint:
+                print("使用 GAIL 模型格式加載")
+                # 創建一個包含必要結構的模擬專家數據
+                state_sample = np.zeros((1, state_dim), dtype=np.float32)
+                if is_discrete:
+                    action_sample = np.array([0], dtype=np.int64)
+                else:
+                    action_sample = np.zeros((1, action_dim), dtype=np.float32)
+                
+                dummy_expert_data = {
+                    "states": state_sample,
+                    "actions": action_sample,
+                    "rewards": np.array([0.0]),
+                    "dones": np.array([False]),
+                    "next_states": state_sample.copy(),
+                    "episode_returns": [0.0],
+                    "episode_lengths": [1],
+                    "mean_return": 0.0,
+                    "std_return": 0.0
+                }
+                
+                # 創建 GAIL 實例
+                gail = GAIL(
+                    policy=policy,
+                    expert_trajectories=dummy_expert_data,
+                    device=device
+                )
+                
+                # 加載判別器和策略
+                gail.discriminator.load_state_dict(checkpoint["discriminator"])
+                
+                # 檢查策略相關鍵
+                policy_keys = [k for k in checkpoint.keys() if "policy" in k.lower()]
+                if policy_keys:
+                    print(f"找到策略相關鍵: {policy_keys}")
+                    for k in policy_keys:
+                        try:
+                            policy.load_state_dict(checkpoint[k])
+                            print(f"使用 '{k}' 成功加載策略")
+                            break
+                        except:
+                            continue
+                else:
+                    print("未找到策略相關鍵，嘗試直接將模型參數加載到策略中")
+            # 情況3: 直接是策略的狀態字典
+            else:
+                print("嘗試直接將檢查點加載為策略狀態字典")
+                try:
+                    policy.load_state_dict(checkpoint)
+                except Exception as e:
+                    print(f"直接加載失敗: {e}")
+                    
+                    # 情況4: 檢查點可能包含其他命名方式的策略
+                    print("嘗試查找其他可能的策略鍵...")
+                    potential_keys = ['actor', 'model', 'net', 'network', 'state_dict']
+                    
+                    for key in potential_keys:
+                        if key in checkpoint:
+                            try:
+                                print(f"嘗試使用 '{key}' 鍵加載策略")
+                                policy.load_state_dict(checkpoint[key])
+                                print(f"使用 '{key}' 成功加載策略")
+                                break
+                            except:
+                                continue
+        # 情況5: 檢查點直接是模型參數
         else:
-            action_sample = np.zeros((1, action_dim), dtype=np.float32)
-            
-        dummy_expert_data = {
-            "states": state_sample,
-            "actions": action_sample,
-            "rewards": np.array([0.0]),
-            "dones": np.array([False]),
-            "next_states": state_sample.copy(),
-            "episode_returns": [0.0],
-            "episode_lengths": [1],
-            "mean_return": 0.0,
-            "std_return": 0.0
-        }
-        
-        # 創建GAIL實例
-        gail = GAIL(
-            policy=policy,
-            expert_trajectories=dummy_expert_data,
-            device=device
-        )
-        
-        # 加載模型
-        if "discriminator" in checkpoint:
-            gail.discriminator.load_state_dict(checkpoint["discriminator"])
-            policy.load_state_dict(checkpoint["policy"])
-        else:
+            print("檢查點不是字典格式，嘗試直接加載")
             policy.load_state_dict(checkpoint)
+        
+        print("策略加載成功！")
+    except Exception as e:
+        print(f"所有加載嘗試均失敗: {e}")
+        print("正在建立一個新的策略模型...")
     
     policy.eval()  # 設置為評估模式
-    
     return policy, is_discrete
 
 
