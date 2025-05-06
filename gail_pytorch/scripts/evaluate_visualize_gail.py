@@ -446,7 +446,7 @@ def generate_summary_report(evaluation_data, expert_data, args):
             "平均回報": f"{evaluation_data['mean_return']:.2f} ± {evaluation_data['std_return']:.2f}",
             "平均回合長度": f"{evaluation_data['mean_length']:.2f} ± {evaluation_data['std_length']:.2f}",
             "最高回報": f"{max(evaluation_data['returns']):.2f}",
-            "最低回報": f"{min(evaluation_data['returns'])::.2f}"
+            "最低回報": f"{min(evaluation_data['returns']):.2f}"
         }
     }
     
@@ -455,7 +455,7 @@ def generate_summary_report(evaluation_data, expert_data, args):
             "平均回報": f"{expert_data['mean_return']:.2f} ± {expert_data['std_return']:.2f}",
             "平均回合長度": f"{np.mean(expert_data['episode_lengths']):.2f} ± {np.std(expert_data['episode_lengths']):.2f}",
             "最高回報": f"{max(expert_data['episode_returns']):.2f}",
-            "最低回報": f"{min(expert_data['episode_returns'])::.2f}"
+            "最低回報": f"{min(expert_data['episode_returns']):.2f}"
         }
         
         # 計算模型與專家的表現差距
