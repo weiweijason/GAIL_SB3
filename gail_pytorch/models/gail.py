@@ -135,6 +135,17 @@ class GAIL:
             states_tensor = torch.FloatTensor(states).to(self.device)
             actions_tensor = torch.FloatTensor(actions).to(self.device)
             
+            # 確保動作張量具有正確的維度
+            # 對於離散動作，需要處理一維張量
+            if actions_tensor.dim() == 1:
+                actions_tensor = actions_tensor.unsqueeze(1)
+            
+            # 確保狀態和動作張量具有相同的批次維度
+            if states_tensor.dim() == 1:
+                states_tensor = states_tensor.unsqueeze(0)
+            if actions_tensor.dim() == 1:
+                actions_tensor = actions_tensor.unsqueeze(0)
+            
             d_output = self.discriminator(states_tensor, actions_tensor)
             # -log(1-D) as the reward
             rewards = -torch.log(1 - d_output + 1e-8).squeeze().detach().cpu().numpy()
