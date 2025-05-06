@@ -167,11 +167,10 @@ def main(args):
         print("\n嘗試加載模型...")
         checkpoint = torch.load(args.model_path, map_location=args.device)
         
+        loaded = False
+        
         if isinstance(checkpoint, dict):
-            # 嘗試以不同的方式加載模型
-            loaded = False
-            
-            # 直接嘗試多個可能的鍵
+            # 常規加載嘗試
             potential_keys = ['policy', 'model', 'network', 'actor', 'state_dict']
             for key in potential_keys:
                 if key in checkpoint:
@@ -183,19 +182,135 @@ def main(args):
                     except Exception as e:
                         print(f"使用 '{key}' 加載失敗: {e}")
             
-            # 如果所有鍵都失敗，嘗試直接加載
-            if not loaded:
+            # 針對GAIL特殊處理 - 嘗試查找分離的策略文件
+            if not loaded and 'discriminator' in checkpoint:
+                print("\n檢測到GAIL模型格式，但缺少策略網絡參數")
+                print("嘗試查找其他可能的策略檔案...")
+                
+                # 嘗試從相同目錄加載不同命名的策略檔案
+                model_dir = os.path.dirname(args.model_path)
+                base_name = os.path.basename(args.model_path).replace('gail_model', '').replace('.pt', '')
+                
+                potential_policy_files = [
+                    os.path.join(model_dir, f"policy_model{base_name}.pt"),
+                    os.path.join(model_dir, f"policy{base_name}.pt"),
+                    os.path.join(model_dir, f"actor{base_name}.pt"),
+                    # 檢查更早的檢查點
+                    os.path.join(model_dir, "gail_model_*00000.pt"),
+                    os.path.join(model_dir, "policy_*.pt")
+                ]
+                
+                # 列出目錄中的所有檔案
                 try:
-                    policy.load_state_dict(checkpoint)
-                    print("成功直接加載模型")
-                    loaded = True
+                    all_files = os.listdir(model_dir)
+                    print(f"目錄 {model_dir} 中的檔案: {all_files}")
+                    
+                    # 檢查是否有任何可能的策略檔案
+                    policy_candidates = [f for f in all_files if "policy" in f.lower() or "actor" in f.lower() or ("model" in f.lower() and "gail" not in f.lower())]
+                    
+                    if policy_candidates:
+                        print(f"找到可能的策略檔案: {policy_candidates}")
+                        for policy_file in policy_candidates:
+                            try:
+                                full_path = os.path.join(model_dir, policy_file)
+                                print(f"嘗試加載 {full_path}...")
+                                policy_checkpoint = torch.load(full_path, map_location=args.device)
+                                
+                                if isinstance(policy_checkpoint, dict):
+                                    for key in potential_keys:
+                                        if key in policy_checkpoint:
+                                            try:
+                                                policy.load_state_dict(policy_checkpoint[key])
+                                                print(f"成功從 {policy_file} 使用 '{key}' 鍵加載策略")
+                                                loaded = True
+                                                break
+                                            except Exception as e:
+                                                print(f"從 {policy_file} 使用 '{key}' 加載失敗: {e}")
+                                    
+                                    if not loaded:
+                                        try:
+                                            policy.load_state_dict(policy_checkpoint)
+                                            print(f"成功直接從 {policy_file} 加載策略")
+                                            loaded = True
+                                            break
+                                        except Exception as e:
+                                            print(f"直接從 {policy_file} 加載失敗: {e}")
+                                else:
+                                    try:
+                                        policy.load_state_dict(policy_checkpoint)
+                                        print(f"成功從 {policy_file} 加載策略")
+                                        loaded = True
+                                        break
+                                    except Exception as e:
+                                        print(f"從 {policy_file} 加載失敗: {e}")
+                            except Exception as e:
+                                print(f"處理 {policy_file} 時出錯: {e}")
+                
                 except Exception as e:
-                    print(f"直接加載失敗: {e}")
+                    print(f"列出目錄內容時出錯: {e}")
+                
+                # 使用GAIL訓練腳本的格式創建新的策略模型路徑
+                if not loaded:
+                    # 尋找訓練過程中保存的中間檢查點
+                    import glob
+                    checkpoint_pattern = os.path.join(model_dir, "gail_model_*.pt")
+                    checkpoints = glob.glob(checkpoint_pattern)
+                    
+                    if checkpoints:
+                        # 按照修改時間排序，優先嘗試最新的檢查點
+                        checkpoints.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                        print(f"找到 {len(checkpoints)} 個檢查點，嘗試依次加載...")
+                        
+                        for checkpoint_path in checkpoints[:5]:  # 只嘗試最新的5個檢查點
+                            if checkpoint_path != args.model_path:  # 避免重複嘗試當前檔案
+                                try:
+                                    print(f"嘗試從檢查點 {checkpoint_path} 加載策略...")
+                                    alt_checkpoint = torch.load(checkpoint_path, map_location=args.device)
+                                    
+                                    if isinstance(alt_checkpoint, dict) and 'policy' in alt_checkpoint:
+                                        try:
+                                            policy.load_state_dict(alt_checkpoint['policy'])
+                                            print(f"成功從檢查點 {checkpoint_path} 加載策略")
+                                            loaded = True
+                                            break
+                                        except Exception as e:
+                                            print(f"從檢查點 {checkpoint_path} 加載失敗: {e}")
+                                except Exception as e:
+                                    print(f"處理檢查點 {checkpoint_path} 時出錯: {e}")
+            
+            # 如果所有嘗試都失敗，創建一個隨機策略並提供警告
+            if not loaded:
+                if 'discriminator' in checkpoint:
+                    print("\n警告: 無法找到有效的策略模型。檢測到GAIL模型，但只包含判別器而無策略參數。")
+                    print("這表明模型可能未被正確保存，或者策略參數被保存在單獨的檔案中。")
+                    print("建議檢查訓練腳本中模型保存的邏輯，確保完整保存策略參數。")
+                    
+                    # 作為臨時解決方案，嘗試直接使用判別器的參數
+                    try:
+                        disc_params = checkpoint['discriminator']
+                        print("嘗試直接從判別器參數初始化策略...")
+                        
+                        # 統計判別器參數的大小並打印
+                        disc_size = sum(p.numel() for p in disc_params.values())
+                        print(f"判別器參數總數: {disc_size}")
+                        
+                        # 打印判別器的層結構
+                        for name, param in disc_params.items():
+                            if isinstance(param, torch.Tensor):
+                                print(f"  - {name}: {param.shape}")
+                    except Exception as e:
+                        print(f"分析判別器參數時出錯: {e}")
+                else:
+                    print("\n警告: 無法加載任何策略模型。將使用隨機初始化的策略進行評估。")
+                print("模型評估結果可能不准確，反映的是隨機策略而非訓練後的策略。")
         else:
-            # 直接加載整個檢查點
-            policy.load_state_dict(checkpoint)
-            print("成功加載模型")
-            loaded = True
+            try:
+                policy.load_state_dict(checkpoint)
+                print("成功直接加載模型")
+                loaded = True
+            except Exception as e:
+                print(f"直接加載失敗: {e}")
+                print("\n警告: 無法加載模型，將使用隨機初始化的策略進行評估。")
             
     except Exception as e:
         print(f"加載模型時出錯: {e}")

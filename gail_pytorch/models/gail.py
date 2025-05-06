@@ -274,11 +274,18 @@ class GAIL:
         if path is None:
             path = os.path.join(self.log_dir, f'gail_model_{self.iterations}.pt')
         
+        # 保存完整模型（包括判別器和策略）
         torch.save({
             'discriminator': self.discriminator.state_dict(),
             'disc_optimizer': self.disc_optimizer.state_dict(),
+            'policy': self.policy.state_dict(),
             'iterations': self.iterations
         }, path)
+        
+        # 單獨保存策略模型，以便後續評估
+        policy_path = path.replace('gail_model', 'policy_model')
+        torch.save(self.policy.state_dict(), policy_path)
+        print(f"Policy saved to {policy_path}")
         
         return path
     
