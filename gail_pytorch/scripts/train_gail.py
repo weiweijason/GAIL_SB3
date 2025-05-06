@@ -9,6 +9,7 @@ import gym
 import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
+from typing import Tuple, List, Dict, Any, Optional
 
 from gail_pytorch.models.gail import GAIL
 from gail_pytorch.models.policy import DiscretePolicy, ContinuousPolicy
@@ -69,11 +70,36 @@ def parse_args():
     parser.add_argument("--device", type=str, default="cuda",
                         help="Device to run on (cuda or cpu)")
     
+    # New arguments for policy optimization
+    parser.add_argument("--n_policy_epochs", type=int, default=10,
+                        help="Number of policy optimization epochs per update")
+    parser.add_argument("--gae_lambda", type=float, default=0.95,
+                        help="GAE lambda parameter")
+    parser.add_argument("--clip_ratio", type=float, default=0.2,
+                        help="PPO clip ratio")
+    parser.add_argument("--value_coef", type=float, default=0.5,
+                        help="Value function coefficient")
+    parser.add_argument("--max_grad_norm", type=float, default=0.5,
+                        help="Maximum gradient norm for clipping")
+    
     return parser.parse_args()
 
 
-def evaluate_policy(policy, env, n_episodes=10, render=False):
-    """Evaluate the policy on the environment."""
+def evaluate_policy(policy: torch.nn.Module, env: gym.Env, args, n_episodes: int = 10, 
+                   render: bool = False) -> Tuple[float, float]:
+    """
+    Evaluate the policy on the environment.
+    
+    Args:
+        policy: The policy to evaluate
+        env: The environment to evaluate in
+        args: Training arguments
+        n_episodes: Number of episodes to evaluate
+        render: Whether to render the environment
+        
+    Returns:
+        Tuple of (mean_return, mean_episode_length)
+    """
     returns = []
     lengths = []
     
@@ -109,6 +135,123 @@ def evaluate_policy(policy, env, n_episodes=10, render=False):
     mean_length = np.mean(lengths)
     
     return mean_return, mean_length
+
+
+def compute_gae(rewards: List[float], values: List[float], masks: List[float], 
+               next_value: float, gamma: float, lam: float) -> List[float]:
+    """
+    Compute Generalized Advantage Estimation.
+    
+    Args:
+        rewards: List of rewards
+        values: List of state values
+        masks: List of masks (0 if episode done, 1 otherwise)
+        next_value: Value of the next state
+        gamma: Discount factor
+        lam: GAE lambda parameter
+        
+    Returns:
+        List of advantages
+    """
+    advantages = []
+    gae = 0
+    
+    for t in reversed(range(len(rewards))):
+        if t == len(rewards) - 1:
+            next_v = next_value
+        else:
+            next_v = values[t + 1]
+            
+        delta = rewards[t] + gamma * next_v * masks[t] - values[t]
+        gae = delta + gamma * lam * masks[t] * gae
+        advantages.insert(0, gae)
+        
+    return advantages
+
+
+def update_policy(policy: torch.nn.Module, optimizer: torch.optim.Optimizer, 
+                 states: np.ndarray, actions: np.ndarray, log_probs_old: List[float], 
+                 advantages: np.ndarray, returns: np.ndarray, args) -> Dict[str, float]:
+    """
+    Update the policy using PPO.
+    
+    Args:
+        policy: The policy to update
+        optimizer: The optimizer to use
+        states: The states from the environment
+        actions: The actions taken by the policy
+        log_probs_old: The log probabilities of the actions under the old policy
+        advantages: The advantages for each state-action pair
+        returns: The returns for each state
+        args: Training arguments
+        
+    Returns:
+        Dictionary of training metrics
+    """
+    states = torch.FloatTensor(states).to(args.device)
+    if isinstance(policy, DiscretePolicy):
+        actions = torch.LongTensor(actions).to(args.device)
+    else:
+        actions = torch.FloatTensor(actions).to(args.device)
+    log_probs_old = torch.FloatTensor(log_probs_old).to(args.device)
+    advantages = torch.FloatTensor(advantages).to(args.device)
+    returns = torch.FloatTensor(returns).to(args.device)
+    
+    # Normalize advantages
+    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+    
+    metrics = {
+        'policy_loss': 0,
+        'value_loss': 0,
+        'entropy': 0,
+        'approx_kl': 0,
+        'clip_fraction': 0
+    }
+    
+    # Run multiple epochs of policy optimization
+    for _ in range(args.n_policy_epochs):
+        # Get new log probs and values
+        if isinstance(policy, DiscretePolicy):
+            action_logits, values = policy(states)
+            dist = torch.distributions.Categorical(logits=action_logits)
+            log_probs = dist.log_prob(actions)
+            entropy = dist.entropy().mean()
+        else:
+            action_means, action_log_stds, values = policy(states)
+            action_stds = torch.exp(action_log_stds)
+            dist = torch.distributions.Normal(action_means, action_stds)
+            log_probs, _ = policy.evaluate_actions(states, actions)
+            entropy = dist.entropy().sum(dim=-1).mean()
+        
+        # PPO policy loss
+        ratio = torch.exp(log_probs - log_probs_old)
+        surr1 = ratio * advantages
+        surr2 = torch.clamp(ratio, 1.0 - args.clip_ratio, 1.0 + args.clip_ratio) * advantages
+        policy_loss = -torch.min(surr1, surr2).mean()
+        
+        # Value loss
+        values = values.squeeze()
+        value_loss = 0.5 * ((values - returns) ** 2).mean()
+        
+        # Total loss
+        loss = policy_loss + args.value_coef * value_loss - args.entropy_weight * entropy
+        
+        # Update policy
+        optimizer.zero_grad()
+        loss.backward()
+        if args.max_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(policy.parameters(), args.max_grad_norm)
+        optimizer.step()
+        
+        # Update metrics
+        with torch.no_grad():
+            metrics['policy_loss'] += policy_loss.item() / args.n_policy_epochs
+            metrics['value_loss'] += value_loss.item() / args.n_policy_epochs
+            metrics['entropy'] += entropy.item() / args.n_policy_epochs
+            metrics['approx_kl'] += ((log_probs_old - log_probs) ** 2).mean().item() / args.n_policy_epochs
+            metrics['clip_fraction'] += ((ratio - 1.0).abs() > args.clip_ratio).float().mean().item() / args.n_policy_epochs
+    
+    return metrics
 
 
 def main(args):
@@ -156,6 +299,7 @@ def main(args):
     
     # Load expert trajectories
     expert_trajectories = load_expert_trajectories(args.expert_data)
+    print(f"Expert mean return: {expert_trajectories['mean_return']:.2f}")
     
     # Create GAIL instance
     gail = GAIL(
@@ -180,10 +324,18 @@ def main(args):
     start_time = time.time()
     
     # Initial evaluation
-    eval_return, eval_length = evaluate_policy(policy, env, args.n_eval_episodes)
+    eval_return, eval_length = evaluate_policy(policy, env, args, args.n_eval_episodes)
     writer.add_scalar('eval/return', eval_return, timesteps_so_far)
     writer.add_scalar('eval/length', eval_length, timesteps_so_far)
     print(f"Initial evaluation: Mean return = {eval_return:.2f}, Mean length = {eval_length:.2f}")
+    
+    # For policy update
+    policy_update_states = []
+    policy_update_actions = []
+    policy_update_log_probs = []
+    policy_update_disc_rewards = []
+    policy_update_masks = []
+    policy_update_values = []
     
     while timesteps_so_far < args.total_timesteps:
         # Reset for new episode
@@ -192,14 +344,16 @@ def main(args):
         episode_length = 0
         episode_return = 0
         episode_disc_rewards = 0
+        last_value = 0
         
-        # Collect experience for policy update
-        states = []
-        actions = []
-        log_probs = []
-        values = []
-        rewards = []
-        masks = []
+        # Collect experience for episode
+        episode_states = []
+        episode_actions = []
+        episode_log_probs = []
+        episode_values = []
+        episode_rewards = []
+        episode_disc_rewards_list = []
+        episode_masks = []
         
         while not done and episode_length < args.max_ep_len:
             # Get action from policy
@@ -209,10 +363,10 @@ def main(args):
                 action, log_prob, value = policy.get_action(state)
             
             # Store experience
-            states.append(state)
-            actions.append(action)
-            log_probs.append(log_prob)
-            values.append(value)
+            episode_states.append(state)
+            episode_actions.append(action)
+            episode_log_probs.append(log_prob)
+            episode_values.append(value)
             
             # Take step in environment
             next_state, env_reward, terminated, truncated, _ = env.step(action)
@@ -221,25 +375,76 @@ def main(args):
             
             # Calculate reward using discriminator
             disc_reward = gail.get_reward(np.array([state]), np.array([action]))[0]
-            rewards.append(disc_reward)
-            masks.append(mask)
+            episode_rewards.append(env_reward)  # Store environment reward for logging
+            episode_disc_rewards_list.append(disc_reward)  # Store discriminator reward for training
+            episode_masks.append(mask)
+            
+            # Save for policy update
+            policy_update_states.append(state)
+            policy_update_actions.append(action)
+            policy_update_log_probs.append(log_prob)
+            policy_update_disc_rewards.append(disc_reward)
+            policy_update_masks.append(mask)
+            policy_update_values.append(value)
             
             # Update tracking variables
             state = next_state
             episode_length += 1
             episode_return += env_reward
             episode_disc_rewards += disc_reward
+            last_value = value
             timesteps_so_far += 1
             
             # Update discriminator if it's time
-            if timesteps_so_far % args.disc_update_freq == 0:
+            if timesteps_so_far % args.disc_update_freq == 0 and len(policy_update_states) >= args.batch_size:
                 # Collect recent experience
-                recent_states = np.array(states[-args.batch_size:])
-                recent_actions = np.array(actions[-args.batch_size:])
+                recent_states = np.array(policy_update_states[-args.batch_size:])
+                recent_actions = np.array(policy_update_actions[-args.batch_size:])
                 
                 # Update discriminator
                 disc_loss = gail.update_discriminator(recent_states, recent_actions)
                 writer.add_scalar('train/disc_loss', disc_loss, timesteps_so_far)
+            
+            # Update policy if it's time
+            if timesteps_so_far % args.policy_update_freq == 0 and len(policy_update_states) >= args.batch_size:
+                # Compute advantages and returns
+                if done:
+                    next_value = 0
+                else:
+                    # Get value of next state
+                    with torch.no_grad():
+                        if is_discrete:
+                            _, next_value = policy(torch.FloatTensor(np.array([state])).to(args.device))
+                        else:
+                            _, _, next_value = policy(torch.FloatTensor(np.array([state])).to(args.device))
+                        next_value = next_value.item()
+                
+                # Compute GAE advantages and returns
+                advantages = compute_gae(
+                    policy_update_disc_rewards, policy_update_values, policy_update_masks,
+                    next_value, args.gamma, args.gae_lambda
+                )
+                returns = [adv + val for adv, val in zip(advantages, policy_update_values)]
+                
+                # Update policy
+                metrics = update_policy(
+                    policy, policy_optimizer,
+                    np.array(policy_update_states), np.array(policy_update_actions),
+                    policy_update_log_probs, np.array(advantages), np.array(returns),
+                    args
+                )
+                
+                # Log policy metrics
+                for k, v in metrics.items():
+                    writer.add_scalar(f'train/{k}', v, timesteps_so_far)
+                
+                # Clear buffers after update
+                policy_update_states = []
+                policy_update_actions = []
+                policy_update_log_probs = []
+                policy_update_disc_rewards = []
+                policy_update_masks = []
+                policy_update_values = []
             
             # Save model if it's time
             if timesteps_so_far % args.save_freq == 0:
@@ -248,7 +453,7 @@ def main(args):
             
             # Evaluate policy if it's time
             if timesteps_so_far % args.eval_freq == 0:
-                eval_return, eval_length = evaluate_policy(policy, env, args.n_eval_episodes)
+                eval_return, eval_length = evaluate_policy(policy, env, args, args.n_eval_episodes)
                 writer.add_scalar('eval/return', eval_return, timesteps_so_far)
                 writer.add_scalar('eval/length', eval_length, timesteps_so_far)
                 print(f"Evaluation at {timesteps_so_far} timesteps: Mean return = {eval_return:.2f}, Mean length = {eval_length:.2f}")
@@ -265,7 +470,7 @@ def main(args):
         print(f"Episode {episodes_so_far} - Length: {episode_length}, Return: {episode_return:.2f}, Disc Reward: {episode_disc_rewards:.2f}")
     
     # Final evaluation
-    eval_return, eval_length = evaluate_policy(policy, env, args.n_eval_episodes)
+    eval_return, eval_length = evaluate_policy(policy, env, args, args.n_eval_episodes)
     writer.add_scalar('eval/return', eval_return, timesteps_so_far)
     writer.add_scalar('eval/length', eval_length, timesteps_so_far)
     print(f"Final evaluation: Mean return = {eval_return:.2f}, Mean length = {eval_length:.2f}")
